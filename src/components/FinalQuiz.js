@@ -1,49 +1,47 @@
 import React, { useState } from 'react';
+import { db } from '../firebase';
+import { collection, addDoc, serverTimestamp } from 'firebase/firestore';
 
 const questions = [
   {
     id: 1,
-    text: 'A 5-stage pipeline executes 8 independent instructions (no hazards). How many cycles does it take?',
-    options: ['40', '12', '13', '8'],
-    answer: '12',
+    text: 'Consider 3 independent instructions on a 5-stage pipeline (no hazards). How many cycles does it take?',
+    code: 'x = y + z;\na = b - c;\np = q * r;',
+    options: ['5', '7', '10', '15'],
+    answer: '7',
     explanation:
-      'With a pipeline and no hazards: 5 + (N−1) = 5 + 7 = 12 cycles.',
+      'With pipelining and no hazards: 5 + (N−1) = 5 + 2 = 7 cycles. Once the pipeline is full, one instruction completes every cycle.',
   },
   {
     id: 2,
-    text: 'What is a RAW (Read After Write) hazard?',
-    options: [
-      'Two instructions write to the same register simultaneously',
-      'An instruction reads a register before a previous instruction has finished writing it',
-      'An instruction is fetched from the wrong memory address',
-      'A write happens before a dependent read in out-of-order execution',
-    ],
-    answer:
-      'An instruction reads a register before a previous instruction has finished writing it',
+    text: 'Now each instruction depends on the previous one (RAW hazard). How many cycles does it take?',
+    code: 'x = y + z;\na = x - b;    // ← uses x\np = a * q;    // ← uses a',
+    options: ['7', '9', '11', '15'],
+    answer: '11',
     explanation:
-      'RAW is the most common hazard: instruction B needs a value that instruction A hasn\'t written back yet.',
+      'Each RAW hazard inserts 2 stall cycles. Two hazards = 4 extra stall cycles. Base pipelined cost is 7, so total = 7 + 4 = 11 cycles.',
   },
   {
     id: 3,
-    text: 'How many stall cycles does a back-to-back RAW dependency introduce in a 5-stage pipeline WITHOUT forwarding?',
+    text: 'How many stall cycles does a back-to-back RAW dependency introduce in a 5-stage pipeline?',
     options: ['0', '1', '2', '3'],
     answer: '2',
     explanation:
-      'Without forwarding, instruction A writes in WB (stage 5) but B needs the value at ID (stage 2 of B). With B starting one cycle after A, B\'s ID is at cycle 3, A\'s WB is at cycle 5 — 2 stall cycles are needed.',
+      'Instruction A writes in WB (stage 5) but B needs the value at ID (stage 2 of B). With B starting one cycle after A, B\'s ID is at cycle 3, A\'s WB is at cycle 5 — 2 stall cycles are needed.',
   },
   {
     id: 4,
-    text: 'What does forwarding (bypassing) accomplish?',
+    text: 'What is a stall (bubble) in a pipeline?',
     options: [
-      'It eliminates all pipeline stalls',
-      'It routes a computed result directly to a later stage without waiting for WB',
-      'It reorders instructions to avoid hazards',
-      'It duplicates the ALU to run two instructions at once',
+      'An extra instruction inserted by the compiler',
+      'A wasted cycle where no useful work happens in the stalled stage',
+      'A stage that runs twice as fast to catch up',
+      'A technique to reorder instructions automatically',
     ],
     answer:
-      'It routes a computed result directly to a later stage without waiting for WB',
+      'A wasted cycle where no useful work happens in the stalled stage',
     explanation:
-      'Forwarding feeds the EX output back to the EX input of a dependent instruction, bypassing the WB stage and eliminating most (but not all) stalls.',
+      'A stall (or bubble) is an empty slot inserted into the pipeline when a data hazard is detected. The dependent instruction waits, wasting a cycle, until the value it needs is available.',
   },
   {
     id: 5,
@@ -89,6 +87,7 @@ export default function FinalQuiz() {
             <div className="quiz-card-header">
               <span className="quiz-number">Q{idx + 1}</span>
               <p className="question-text">{q.text}</p>
+              {q.code && <pre className="code-block">{q.code}</pre>}
             </div>
 
             <div className="options">
@@ -131,7 +130,21 @@ export default function FinalQuiz() {
         <div className="section-cta">
           <button
             className="cta-btn"
-            onClick={() => setSubmitted(true)}
+            onClick={() => {
+              setSubmitted(true);
+              const results = questions.map((q) => ({
+                questionId: q.id,
+                selected: selected[q.id],
+                correct: selected[q.id] === q.answer,
+              }));
+              const score = results.filter((r) => r.correct).length;
+              addDoc(collection(db, 'finalQuizResults'), {
+                results,
+                score,
+                total: questions.length,
+                timestamp: serverTimestamp(),
+              }).catch(() => {});
+            }}
             disabled={Object.keys(selected).length < questions.length}
           >
             Submit Answers

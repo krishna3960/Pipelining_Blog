@@ -36,51 +36,59 @@ function buildGridWith(N) {
   return { grid, totalCycles };
 }
 
-// Fixed 2-instruction RAW hazard example
-function buildGridHazard() {
-  const totalCycles = 9;
-  const grid = [
-    [
-      { stage: 'IF', type: 'normal' },
-      { stage: 'ID', type: 'normal' },
-      { stage: 'EX', type: 'normal' },
-      { stage: 'MEM', type: 'normal' },
-      { stage: 'WB', type: 'normal' },
-      null, null, null, null,
-    ],
-    [
-      null,
-      { stage: 'IF', type: 'normal' },
-      { stage: 'ID', type: 'normal' },
-      { stage: 'stall', type: 'stall' },
-      { stage: 'stall', type: 'stall' },
-      { stage: 'EX', type: 'normal' },
-      { stage: 'MEM', type: 'normal' },
-      { stage: 'WB', type: 'normal' },
-      null,
-    ],
-  ];
+// Every instruction depends on the previous one (RAW chain).
+// Each dependency adds 2 stall cycles + 1 pipeline slot = 3 extra cycles.
+// Total: 5 + 3×(N−1) = 3N + 2 cycles.
+function buildGridHazard(N) {
+  const totalCycles = N === 1 ? 5 : 3 * N + 2;
+  const S = (stage) => ({ stage, type: 'normal' });
+  const STALL = () => ({ stage: 'stall', type: 'stall' });
+  const grid = [];
+
+  for (let i = 0; i < N; i++) {
+    const row = new Array(totalCycles).fill(null);
+    if (i === 0) {
+      row[0] = S('IF'); row[1] = S('ID'); row[2] = S('EX'); row[3] = S('MEM'); row[4] = S('WB');
+    } else {
+      row[i] = S('IF');
+      // Pipeline-backup stalls between IF and ID (stalled behind previous instruction)
+      for (let c = i + 1; c < 3 * i - 1; c++) row[c] = STALL();
+      // ID, then 2 RAW-hazard stalls, then EX → MEM → WB
+      row[3 * i - 1] = S('ID');
+      row[3 * i]     = STALL();
+      row[3 * i + 1] = STALL();
+      row[3 * i + 2] = S('EX');
+      row[3 * i + 3] = S('MEM');
+      row[3 * i + 4] = S('WB');
+    }
+    grid.push(row);
+  }
   return { grid, totalCycles };
 }
 
 function buildGrid(mode, N) {
   if (mode === 'without') return buildGridWithout(N);
   if (mode === 'with')    return buildGridWith(N);
-  return buildGridHazard();
+  return buildGridHazard(N);
 }
 
 // ── Instruction label helpers ──────────────────────────────────────
 function makeInstructions(mode, N) {
+  const vars = 'xabcdefghijklmnopqrst'.split('');
+  const srcs = 'yzmnpqrstuvwABCDEFGHI'.split('');
   if (mode === 'hazard') {
-    return ['ADD R1, R2, R3', 'SUB R4, R1, R5  ← needs R1'];
+    return Array.from({ length: N }, (_, i) => {
+      const dst = vars[i % vars.length];
+      if (i === 0) return `${dst} = ${srcs[0]} + ${srcs[1]};`;
+      const prev = vars[(i - 1) % vars.length];
+      return `${dst} = ${prev} - ${srcs[i + 1]};  ← uses ${prev}`;
+    });
   }
-  const ops  = ['ADD','SUB','MUL','AND','OR','XOR','SLL','SRL','SLT','LW'];
   return Array.from({ length: N }, (_, i) => {
-    const op  = ops[i % ops.length];
-    const dst = `R${i * 3 + 1}`;
-    const s1  = `R${i * 3 + 2}`;
-    const s2  = `R${i * 3 + 3}`;
-    return `${op} ${dst}, ${s1}, ${s2}`;
+    const dst = vars[i % vars.length];
+    const s1  = srcs[(i * 2) % srcs.length];
+    const s2  = srcs[(i * 2 + 1) % srcs.length];
+    return `${dst} = ${s1} + ${s2};`;
   });
 }
 
@@ -113,57 +121,79 @@ function getCycleNote(mode, cycle, N) {
   }
 
   if (mode === 'hazard') {
-    const notes = [
-      'Cycle 1: I1 fetched (IF).',
-      'Cycle 2: I1 → ID, I2 fetched (IF).',
-      'Cycle 3: I1 → EX. I2 finishes decode (ID) but needs R1 — stall!',
-      'Cycle 4: STALL — I2 waits. I1 is in MEM, R1 not written yet.',
-      'Cycle 5: STALL — I2 still waits. I1 writes R1 in WB this cycle.',
-      'Cycle 6: R1 is ready! I2 finally enters EX.',
-      'Cycle 7: I2 → MEM.',
-      'Cycle 8: I2 → WB. Done!',
-      'Cycle 9: Pipeline drained.',
-    ];
-    return notes[cycle] || null;
+    const { grid } = buildGridHazard(N);
+    const totalCycles = N === 1 ? 5 : 3 * N + 2;
+    const active = [];
+    let hasStall = false;
+    for (let i = 0; i < N; i++) {
+      const cell = grid[i][cycle];
+      if (cell) {
+        if (cell.type === 'stall') {
+          active.push(`I${i + 1}→STALL`);
+          hasStall = true;
+        } else {
+          active.push(`I${i + 1}→${cell.stage}`);
+        }
+      }
+    }
+    if (active.length === 0) return `Cycle ${c}: Pipeline empty.`;
+    if (c === 1) return `Cycle 1: I1 enters the pipeline (IF). Pipeline filling up.`;
+    if (c === totalCycles) return `Cycle ${c}: Pipeline drains. All ${N} instructions complete!`;
+    const inFlight = active.length;
+    let note = `Cycle ${c}: ${inFlight} instruction${inFlight > 1 ? 's' : ''} in-flight: ${active.join(', ')}.`;
+    if (hasStall) note += ' RAW hazard — waiting for result.';
+    return note;
   }
   return null;
 }
 
 // ── Stats panel ────────────────────────────────────────────────────
-function StatsPanel({ N }) {
+function StatsPanel({ N, mode }) {
   const withoutCycles = N * 5;
   const withCycles    = N + 4;
-  const speedup       = (withoutCycles / withCycles).toFixed(2);
-  const maxBar        = withoutCycles;
-  const pctWith       = (withCycles / maxBar) * 100;
+  const hazardCycles  = N === 1 ? 5 : 3 * N + 2;
+  const maxBar        = mode === 'hazard' ? hazardCycles : withoutCycles;
+
+  const rows = mode === 'hazard'
+    ? [
+        { label: 'With pipeline (no hazard)', cycles: withCycles, cls: 'with-bar' },
+        { label: 'With pipeline (RAW hazard)', cycles: hazardCycles, cls: 'hazard-bar' },
+      ]
+    : [
+        { label: 'Without pipeline', cycles: withoutCycles, cls: 'without-bar' },
+        { label: 'With pipeline', cycles: withCycles, cls: 'with-bar' },
+      ];
+
+  const speedup = mode === 'hazard'
+    ? (hazardCycles / withCycles).toFixed(2)
+    : (withoutCycles / withCycles).toFixed(2);
+
+  const formula = mode === 'hazard'
+    ? `N+4 = ${withCycles}  |  3N+2 = ${hazardCycles}  |  ${hazardCycles - withCycles} stall cycles wasted`
+    : `N×5 = ${withoutCycles}  |  N+4 = ${withCycles}  |  limit as N→∞ = 5×`;
+
+  const badgeLabel = mode === 'hazard'
+    ? `${speedup}× slowdown vs. no-hazard`
+    : `${speedup}× speedup`;
 
   return (
     <div className="stats-panel">
       <h4 className="stats-title">Cycle Count Comparison  <span className="stats-n">N = {N} instruction{N !== 1 ? 's' : ''}</span></h4>
 
-      <div className="stats-row">
-        <span className="stats-label">Without pipeline</span>
-        <div className="stats-bar-wrap">
-          <div className="stats-bar without-bar" style={{ width: '100%' }}>
-            <span className="stats-bar-val">{withoutCycles} cycles</span>
+      {rows.map((r) => (
+        <div className="stats-row" key={r.label}>
+          <span className="stats-label">{r.label}</span>
+          <div className="stats-bar-wrap">
+            <div className={`stats-bar ${r.cls}`} style={{ width: `${Math.max((r.cycles / maxBar) * 100, 4)}%` }}>
+              <span className="stats-bar-val">{r.cycles} cycles</span>
+            </div>
           </div>
         </div>
-      </div>
-
-      <div className="stats-row">
-        <span className="stats-label">With pipeline</span>
-        <div className="stats-bar-wrap">
-          <div className="stats-bar with-bar" style={{ width: `${Math.max(pctWith, 4)}%` }}>
-            <span className="stats-bar-val">{withCycles} cycles</span>
-          </div>
-        </div>
-      </div>
+      ))}
 
       <div className="stats-footer">
-        <span className="speedup-badge">{speedup}× speedup</span>
-        <span className="stats-formula">
-          N×5 = {withoutCycles} &nbsp;|&nbsp; N+4 = {withCycles} &nbsp;|&nbsp; limit as N→∞ = 5×
-        </span>
+        <span className="speedup-badge">{badgeLabel}</span>
+        <span className="stats-formula">{formula}</span>
       </div>
     </div>
   );
@@ -179,7 +209,7 @@ const SPEED_OPTIONS = [
 const MODE_LABELS = {
   without: (N) => `No Pipeline — ${N} instruction${N !== 1 ? 's' : ''} × 5 stages = ${N * 5} cycles`,
   with:    (N) => `Pipelined (no hazard) — 5 + (${N}−1) = ${N + 4} cycles`,
-  hazard:  ()  => 'Pipelined (RAW hazard) — 2 stall bubbles inserted = 9 cycles',
+  hazard:  (N) => `Pipelined (RAW hazard) — 5 + 3×(${N}−1) = ${N === 1 ? 5 : 3 * N + 2} cycles`,
 };
 
 // ── Component ──────────────────────────────────────────────────────
@@ -194,7 +224,7 @@ export default function PipelineVisual({ mode }) {
   const instructions = makeInstructions(mode, N);
 
   // Compact cells when table would be very wide
-  const compact = mode === 'without' ? N > 7 : N > 14;
+  const compact = mode === 'without' ? N > 7 : mode === 'hazard' ? N > 7 : N > 14;
   const cellSize = compact ? 28 : 42;
 
   // Reset animation when mode or N changes
@@ -241,24 +271,20 @@ export default function PipelineVisual({ mode }) {
 
       {/* ── N slider ── */}
       <div className="n-slider-row">
-        <label className="n-slider-label">
-          Instructions (N)
-          {mode === 'hazard' && <span className="n-slider-locked"> — fixed example</span>}
-        </label>
+        <label className="n-slider-label">Instructions (N)</label>
         <input
           type="range"
           min={1}
           max={20}
           value={N}
           onChange={(e) => setN(parseInt(e.target.value))}
-          disabled={mode === 'hazard'}
           className="scrubber n-scrubber"
         />
-        <span className="n-value">{mode === 'hazard' ? 2 : N}</span>
+        <span className="n-value">{N}</span>
       </div>
 
-      {/* ── Stats panel (not for hazard fixed example) ── */}
-      {mode !== 'hazard' && <StatsPanel N={N} />}
+      {/* ── Stats panel ── */}
+      <StatsPanel N={N} mode={mode} />
 
       {/* ── Playback controls ── */}
       <div className="anim-controls">

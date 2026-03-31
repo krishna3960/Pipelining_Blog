@@ -1,8 +1,7 @@
-import React, { useState } from 'react';
+import React from 'react';
 import PipelineVisual from './PipelineVisual';
 
 export default function BlogPost({ onFinish }) {
-  const [showPipeline, setShowPipeline] = useState('without');
 
   return (
     <section className="section blog">
@@ -56,31 +55,30 @@ export default function BlogPost({ onFinish }) {
           speedup for long sequences.
         </p>
 
-        <h3>Interactive Diagram</h3>
-        <p>Toggle between the two modes to see the difference:</p>
-
-        <div className="toggle-row">
-          <button
-            className={showPipeline === 'without' ? 'toggle-btn active' : 'toggle-btn'}
-            onClick={() => setShowPipeline('without')}
-          >
-            Without Pipeline
-          </button>
-          <button
-            className={showPipeline === 'with' ? 'toggle-btn active' : 'toggle-btn'}
-            onClick={() => setShowPipeline('with')}
-          >
-            With Pipeline (no hazard)
-          </button>
-          <button
-            className={showPipeline === 'hazard' ? 'toggle-btn active' : 'toggle-btn'}
-            onClick={() => setShowPipeline('hazard')}
-          >
-            With Pipeline (RAW hazard)
-          </button>
+        <div className="how-to-use">
+          <h4>How to use the diagrams</h4>
+          <ul>
+            <li>Press <strong>Play</strong> to animate the pipeline cycle by cycle, or <strong>Step</strong> to advance one cycle at a time.</li>
+            <li>Drag the <strong>scrubber</strong> to jump to any cycle.</li>
+            <li>Use the <strong>Instructions (N)</strong> slider to change how many instructions run through the pipeline.</li>
+            <li>The <strong>bar chart</strong> updates live to compare cycle counts.</li>
+            <li>You can modify speed by choosing slow/normal/fast on the top right</li>
+          </ul>
         </div>
 
-        <PipelineVisual mode={showPipeline} />
+        <h3>1. Without a Pipeline — Interactive</h3>
+        <p>
+          Each instruction completes all 5 stages before the next one begins.
+          Use the controls below to step through the execution:
+        </p>
+        <PipelineVisual mode="without" />
+
+        <h3>2. With a Pipeline (No Hazard) — Interactive</h3>
+        <p>
+          Now instructions overlap — while one is executing, the next is already
+          being decoded. Compare the cycle count with the sequential version above:
+        </p>
+        <PipelineVisual mode="with" />
 
         <h3>Data Hazards (RAW)</h3>
         <p>
@@ -89,23 +87,24 @@ export default function BlogPost({ onFinish }) {
           computing yet. Example:
         </p>
         <pre className="code-block">
-{`ADD R1, R2, R3   ; writes R1 in WB stage (cycle 5)
-SUB R4, R1, R5   ; needs R1 in ID stage (cycle 3) → 2-cycle stall`}
+{`x = y + z;       // writes x in WB stage (cycle 5)
+a = x - b;       // needs x in ID stage (cycle 3) → 2-cycle stall
+p = a * q;       // needs a from previous → 2 more stall cycles`}
         </pre>
         <p>
           The pipeline must insert <strong>stall cycles (bubbles)</strong> —
           wasted slots where no useful work happens — until the value is ready.
-          Without forwarding, a RAW hazard between back-to-back instructions
-          costs <strong>2 stall cycles</strong> per dependency.
+          A RAW hazard between back-to-back instructions
+          costs <strong>2 stall cycles</strong> per dependency. With two
+          chained hazards, 4 total stall cycles are inserted (7 + 4 = 11 cycles).
         </p>
 
-        <h3>Forwarding (Bypassing)</h3>
+        <h3>3. With a Pipeline (RAW Hazard) — Interactive</h3>
         <p>
-          Hardware can short-circuit the stall by forwarding the result directly
-          from the EX/MEM output to the EX input of the dependent instruction,
-          without waiting for WB. This eliminates most stalls — but not all
-          (load-use hazards still need 1 stall cycle).
+          Now see it in action — when an instruction depends on the result of
+          the previous one, the pipeline must stall:
         </p>
+        <PipelineVisual mode="hazard" />
 
         <div className="key-takeaway">
           <h4>Key Takeaways</h4>
@@ -114,7 +113,6 @@ SUB R4, R1, R5   ; needs R1 in ID stage (cycle 3) → 2-cycle stall`}
             <li>Without a pipeline: <strong>N × 5</strong> cycles for N instructions.</li>
             <li>With a pipeline (no hazards): <strong>5 + (N−1)</strong> cycles.</li>
             <li>RAW hazards introduce stall bubbles, reducing efficiency.</li>
-            <li>Forwarding hardware removes most — but not all — stalls.</li>
           </ul>
         </div>
       </div>

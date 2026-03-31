@@ -1,48 +1,59 @@
 import React, { useState } from 'react';
+import { db } from '../firebase';
+import { collection, addDoc, serverTimestamp } from 'firebase/firestore';
 
 const questions = [
   {
     id: 1,
-    title: 'No Data Dependency',
-    code: `ADD R1, R2, R3   ; R1 = R2 + R3
-SUB R4, R5, R6   ; R4 = R5 - R6
-MUL R7, R8, R9   ; R7 = R8 * R9`,
+    title: 'Example 1',
+    code: `x = y + z;
+a = b - c;
+p = q * r;`,
     description:
       'A 5-stage pipeline (IF → ID → EX → MEM → WB). Each instruction takes 1 cycle per stage. These 3 instructions have NO dependency on each other.',
     question:
       'Assuming pipelining, how many cycles does it take to complete all 3 instructions?',
-    hint: 'With a pipeline, instructions overlap. The first instruction takes 5 cycles to fill the pipeline, then each additional instruction adds just 1 more cycle.',
     answer: 7,
     explanation:
       'With pipelining and no hazards: 5 stages + (N−1) = 5 + 2 = 7 cycles. Once the pipeline is full, one instruction completes every cycle.',
   },
   {
     id: 2,
-    title: 'Data Dependency (RAW Hazard)',
-    code: `ADD R1, R2, R3   ; R1 = R2 + R3
-SUB R4, R1, R5   ; R4 = R1 - R5  ← uses R1
-MUL R6, R4, R7   ; R6 = R4 * R7  ← uses R4`,
+    title: 'Example 2',
+    code: `x = y + z;
+a = x - b;    
+p = a * q;    `,
     description:
-      'Same 5-stage pipeline, no forwarding. Each instruction depends on the result of the previous one (Read After Write hazard). A dependent instruction must wait until the previous one reaches WB before it can proceed to EX.',
+      'Same 5-stage pipeline. Each instruction depends on the result of the previous one (Read After Write hazard). A dependent instruction must wait until the previous one reaches WB before it can proceed to EX.',
     question:
-      'Assuming pipelining (no forwarding), how many cycles does it take to complete all 3 instructions?',
-    hint: 'Each back-to-back RAW hazard stalls the pipeline for 2 cycles. There are 2 hazards here — how does that affect the total?',
+      'Assuming pipelining , how many cycles does it take to complete all 3 instructions?',
     answer: 11,
     explanation:
-      'With pipelining but no forwarding, each RAW hazard inserts 2 stall cycles. Two hazards = 4 extra stall cycles. Base pipelined cost is 7 cycles, so total = 7 + 4 = 11 cycles.',
+      'With pipelining, each RAW hazard inserts 2 stall cycles. Two hazards = 4 extra stall cycles. Base pipelined cost is 7 cycles, so total = 7 + 4 = 11 cycles.',
   },
 ];
 
 export default function QuizSection({ onFinish }) {
   const [answers, setAnswers] = useState({ 1: '', 2: '' });
-  const [submitted, setSubmitted] = useState({ 1: false, 2: false });
-  const [showHint, setShowHint] = useState({ 1: false, 2: false });
+  const [submitted, setSubmitted] = useState(false);
 
-  const handleSubmit = (id) => {
-    setSubmitted((s) => ({ ...s, [id]: true }));
+  const allAnswered = answers[1] !== '' && answers[2] !== '';
+
+  const handleSubmit = () => {
+    setSubmitted(true);
+    const results = questions.map((q) => ({
+      questionId: q.id,
+      answer: parseInt(answers[q.id]),
+      correct: parseInt(answers[q.id]) === q.answer,
+    }));
+    const score = results.filter((r) => r.correct).length;
+    addDoc(collection(db, 'warmupResults'), {
+      results,
+      score,
+      total: questions.length,
+      timestamp: serverTimestamp(),
+    }).catch(() => {});
   };
-
-  const isCorrect = (id) => parseInt(answers[id]) === questions[id - 1].answer;
 
   return (
     <section className="section">
@@ -71,14 +82,6 @@ export default function QuizSection({ onFinish }) {
               <strong>{q.question}</strong>
             </p>
 
-            <button
-              className="hint-btn"
-              onClick={() => setShowHint((h) => ({ ...h, [q.id]: !h[q.id] }))}
-            >
-              {showHint[q.id] ? 'Hide hint' : 'Show hint'}
-            </button>
-            {showHint[q.id] && <p className="hint">{q.hint}</p>}
-
             <div className="answer-row">
               <input
                 type="number"
@@ -88,43 +91,34 @@ export default function QuizSection({ onFinish }) {
                 onChange={(e) =>
                   setAnswers((a) => ({ ...a, [q.id]: e.target.value }))
                 }
-                disabled={submitted[q.id]}
+                disabled={submitted}
               />
               <span className="cycles-label">cycles</span>
-              {!submitted[q.id] && (
-                <button
-                  className="submit-btn"
-                  onClick={() => handleSubmit(q.id)}
-                  disabled={!answers[q.id]}
-                >
-                  Check
-                </button>
-              )}
             </div>
-
-            {submitted[q.id] && (
-              <div className={`feedback ${isCorrect(q.id) ? 'correct' : 'incorrect'}`}>
-                <span className="feedback-icon">
-                  {isCorrect(q.id) ? '✓' : '✗'}
-                </span>
-                <div>
-                  <strong>
-                    {isCorrect(q.id) ? 'Correct!' : `Incorrect — the answer is ${q.answer}.`}
-                  </strong>
-                  <p>{q.explanation}</p>
-                </div>
-              </div>
-            )}
           </div>
         </div>
       ))}
 
-      {submitted[1] && submitted[2] && (
+      {!submitted && (
+        <div className="section-cta">
+          <button
+            className="cta-btn"
+            onClick={handleSubmit}
+            disabled={!allAnswered}
+          >
+            Submit Answers
+          </button>
+          {!allAnswered && (
+            <p className="cta-note">Answer both questions to submit.</p>
+          )}
+        </div>
+      )}
+
+      {submitted && (
         <div className="section-cta">
           <p>
-            Notice the difference? No dependencies gave 7 cycles, but the RAW
-            hazard chain pushed it to 11. Data dependencies cost real cycles in
-            a pipeline — read on to understand exactly why.
+            Your answers have been recorded. Read on to find out
+            how pipelining really works — and whether you got it right!
           </p>
           <button className="cta-btn" onClick={onFinish}>
             Read the Blog Post →
